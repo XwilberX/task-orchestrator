@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/XwilberX/task-orchestrator/internal/config"
@@ -11,6 +12,7 @@ import (
 	"github.com/XwilberX/task-orchestrator/internal/handlers"
 	apimw "github.com/XwilberX/task-orchestrator/internal/middleware"
 	"github.com/XwilberX/task-orchestrator/internal/repositories"
+	"github.com/XwilberX/task-orchestrator/internal/scheduler"
 	"github.com/XwilberX/task-orchestrator/internal/services"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -48,9 +50,28 @@ func main() {
 	defRepo := repositories.NewDefinitionRepository(db)
 	taskRepo := repositories.NewTaskRepository(db)
 
+	// Worker pool
+	maxConcurrent, _ := strconv.Atoi(cfg.MaxConcurrentTasks)
+	if maxConcurrent <= 0 {
+		maxConcurrent = 10
+	}
+	pool := scheduler.New(maxConcurrent, taskRepo, defRepo, exec)
+
+	// Recovery: re-encolar tareas RUNNING de ejecuciones previas
+	recCtx, recCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer recCancel()
+	if err := pool.Recover(recCtx); err != nil {
+		log.Printf("recovery warning: %v", err)
+	}
+
+	// Iniciar polling de tareas QUEUED
+	poolCtx, poolCancel := context.WithCancel(context.Background())
+	defer poolCancel()
+	pool.Start(poolCtx)
+
 	// Servicios
 	defSvc := services.NewDefinitionService(defRepo)
-	taskSvc := services.NewTaskService(taskRepo, defRepo, exec)
+	taskSvc := services.NewTaskService(taskRepo, defRepo, pool)
 
 	// Handlers
 	defHandler := handlers.NewDefinitionHandler(defSvc)
@@ -66,14 +87,13 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// API v1 — protegida por API key
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(apimw.APIKey(cfg.APIKey))
 		r.Mount("/definitions", defHandler.Routes())
 		r.Mount("/tasks", taskHandler.Routes())
 	})
 
-	log.Printf("servidor iniciado en :%s", cfg.Port)
+	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
 		log.Fatalf("server: %v", err)
 	}
