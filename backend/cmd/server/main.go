@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/XwilberX/task-orchestrator/internal/config"
+	"github.com/XwilberX/task-orchestrator/internal/executor"
 	"github.com/XwilberX/task-orchestrator/internal/handlers"
 	apimw "github.com/XwilberX/task-orchestrator/internal/middleware"
 	"github.com/XwilberX/task-orchestrator/internal/repositories"
@@ -22,13 +23,13 @@ func main() {
 	}
 
 	// MongoDB
-	client, err := repositories.Connect(cfg.MongoURI)
+	mongoClient, err := repositories.Connect(cfg.MongoURI)
 	if err != nil {
 		log.Fatalf("mongodb: %v", err)
 	}
-	defer client.Disconnect(context.Background())
+	defer mongoClient.Disconnect(context.Background())
 
-	db := client.Database(cfg.MongoDB)
+	db := mongoClient.Database(cfg.MongoDB)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -37,14 +38,23 @@ func main() {
 	}
 	log.Printf("conectado a MongoDB: %s", cfg.MongoDB)
 
+	// Executor
+	exec, err := executor.New(cfg.GVisorRuntime)
+	if err != nil {
+		log.Fatalf("executor: %v", err)
+	}
+
 	// Repositorios
 	defRepo := repositories.NewDefinitionRepository(db)
+	taskRepo := repositories.NewTaskRepository(db)
 
 	// Servicios
 	defSvc := services.NewDefinitionService(defRepo)
+	taskSvc := services.NewTaskService(taskRepo, defRepo, exec)
 
 	// Handlers
 	defHandler := handlers.NewDefinitionHandler(defSvc)
+	taskHandler := handlers.NewTaskHandler(taskSvc)
 
 	// Router
 	r := chi.NewRouter()
@@ -60,6 +70,7 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(apimw.APIKey(cfg.APIKey))
 		r.Mount("/definitions", defHandler.Routes())
+		r.Mount("/tasks", taskHandler.Routes())
 	})
 
 	log.Printf("servidor iniciado en :%s", cfg.Port)
