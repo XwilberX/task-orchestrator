@@ -1,0 +1,15 @@
+# Backend
+backend/.env
+backend/tmp/
+backend/vendor/
+
+# Frontend
+frontend/.env
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+
+# General
+.DS_Store
+*.local
+.claude/

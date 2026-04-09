@@ -1,0 +1,55 @@
+services:
+  orchestrator:
+    build:
+      context: ./backend
+      target: dev
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: task_orchestrator
+      VICTORIA_LOGS_URL: http://victoria-logs:9428
+      DOCKER_HOST: unix:///var/run/docker.sock
+      MAX_CONCURRENT_TASKS: 10
+      GVISOR_RUNTIME: ""
+    env_file:
+      - ./backend/.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app
+    depends_on:
+      - mongo
+      - victoria-logs
+
+  dashboard:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "5173:5173"
+    env_file:
+      - ./frontend/.env
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - orchestrator
+
+  mongo:
+    image: mongo:8.0.20
+    volumes:
+      - mongo_data:/data/db
+
+  victoria-logs:
+    image: victoriametrics/victoria-logs:v1.49.0
+    ports:
+      - "9428:9428"
+    volumes:
+      - vlogs_data:/victoria-logs-data
+    command:
+      - "-storageDataPath=/victoria-logs-data"
+
+volumes:
+  mongo_data:
+  vlogs_data:
