@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XwilberX/task-orchestrator/internal/events"
 	"github.com/XwilberX/task-orchestrator/internal/logger"
 	"github.com/XwilberX/task-orchestrator/internal/runtime"
 	"github.com/docker/docker/api/types"
@@ -20,19 +21,20 @@ import (
 
 // Executor ejecuta tareas en contenedores Docker aislados con gVisor.
 type Executor struct {
-	cli     *client.Client
-	runtime string // "runsc" para gVisor, "" para runc (dev)
-	cache   imageCache
-	vlogs   *logger.Client
+	cli       *client.Client
+	runtime   string // "runsc" para gVisor, "" para runc (dev)
+	cache     imageCache
+	vlogs     *logger.Client
+	logBroker *events.LogBroker
 }
 
 // New crea un Executor conectado al daemon Docker.
-func New(gvisorRuntime string, vlogs *logger.Client) (*Executor, error) {
+func New(gvisorRuntime string, vlogs *logger.Client, logBroker *events.LogBroker) (*Executor, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
-	return &Executor{cli: cli, runtime: gvisorRuntime, vlogs: vlogs}, nil
+	return &Executor{cli: cli, runtime: gvisorRuntime, vlogs: vlogs, logBroker: logBroker}, nil
 }
 
 // Run ejecuta la tarea y devuelve el resultado.
@@ -169,7 +171,7 @@ func (e *Executor) streamLogs(ctx context.Context, containerID string, cfg RunCo
 	e.scanAndSend(&stderrBuf, "stderr", cfg, out)
 }
 
-// scanAndSend envía cada línea del buffer a Victoria Logs.
+// scanAndSend envía cada línea del buffer a Victoria Logs y al LogBroker.
 func (e *Executor) scanAndSend(r io.Reader, stream string, cfg RunConfig, out io.Writer) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -187,6 +189,9 @@ func (e *Executor) scanAndSend(r io.Reader, stream string, cfg RunConfig, out io
 				Attempt:        cfg.Attempt,
 				Stream:         stream,
 			})
+		}
+		if e.logBroker != nil {
+			e.logBroker.Publish(cfg.TaskID, line)
 		}
 	}
 }

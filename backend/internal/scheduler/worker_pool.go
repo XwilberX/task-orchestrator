@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/XwilberX/task-orchestrator/internal/events"
 	"github.com/XwilberX/task-orchestrator/internal/executor"
 	"github.com/XwilberX/task-orchestrator/internal/models"
 	"github.com/XwilberX/task-orchestrator/internal/repositories"
@@ -16,10 +17,12 @@ const pollInterval = 3 * time.Second
 
 // WorkerPool controla la concurrencia global de ejecución de tareas.
 type WorkerPool struct {
-	slots    chan struct{} // semáforo global
-	taskRepo *repositories.TaskRepository
-	defRepo  *repositories.DefinitionRepository
-	exec     *executor.Executor
+	slots     chan struct{} // semáforo global
+	taskRepo  *repositories.TaskRepository
+	defRepo   *repositories.DefinitionRepository
+	exec      *executor.Executor
+	broker    *events.Broker
+	logBroker *events.LogBroker
 }
 
 // New crea un WorkerPool con el límite de concurrencia dado.
@@ -28,12 +31,16 @@ func New(
 	taskRepo *repositories.TaskRepository,
 	defRepo *repositories.DefinitionRepository,
 	exec *executor.Executor,
+	broker *events.Broker,
+	logBroker *events.LogBroker,
 ) *WorkerPool {
 	return &WorkerPool{
-		slots:    make(chan struct{}, maxConcurrent),
-		taskRepo: taskRepo,
-		defRepo:  defRepo,
-		exec:     exec,
+		slots:     make(chan struct{}, maxConcurrent),
+		taskRepo:  taskRepo,
+		defRepo:   defRepo,
+		exec:      exec,
+		broker:    broker,
+		logBroker: logBroker,
 	}
 }
 
@@ -135,6 +142,12 @@ func (p *WorkerPool) runWithRetries(task *models.Task) {
 			"finished_at": now,
 			"exit_code":   result.ExitCode,
 		})
+		p.publish(task.ID, finalStatus)
+
+		// Cerrar el log broker para esta tarea
+		if p.logBroker != nil {
+			p.logBroker.Close(task.ID)
+		}
 
 		// ¿Reintentamos?
 		if (finalStatus == models.StatusFailed || finalStatus == models.StatusTimeout) &&
@@ -149,10 +162,17 @@ func (p *WorkerPool) runWithRetries(task *models.Task) {
 				"status":  models.StatusPending,
 				"attempt": task.Attempt,
 			})
+			p.publish(task.ID, models.StatusPending)
 			continue
 		}
 
 		break
+	}
+}
+
+func (p *WorkerPool) publish(taskID string, status models.TaskStatus) {
+	if p.broker != nil {
+		p.broker.Publish(events.TaskEvent{TaskID: taskID, Status: status})
 	}
 }
 
@@ -163,6 +183,7 @@ func (p *WorkerPool) runOnce(task *models.Task) *executor.ExecResult {
 		"status":     models.StatusRunning,
 		"started_at": now,
 	})
+	p.publish(task.ID, models.StatusRunning)
 
 	timeout := time.Duration(task.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

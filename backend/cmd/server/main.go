@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/XwilberX/task-orchestrator/internal/config"
+	"github.com/XwilberX/task-orchestrator/internal/events"
 	"github.com/XwilberX/task-orchestrator/internal/executor"
 	"github.com/XwilberX/task-orchestrator/internal/handlers"
 	applogger "github.com/XwilberX/task-orchestrator/internal/logger"
@@ -43,10 +44,13 @@ func main() {
 
 	// Victoria Logs
 	vlogs := applogger.New(cfg.VictoriaLogsURL)
-	log.Printf("Victoria Logs: %s", cfg.VictoriaLogsURL)
+
+	// Brokers SSE
+	broker := events.NewBroker()
+	logBroker := events.NewLogBroker()
 
 	// Executor
-	exec, err := executor.New(cfg.GVisorRuntime, vlogs)
+	exec, err := executor.New(cfg.GVisorRuntime, vlogs, logBroker)
 	if err != nil {
 		log.Fatalf("executor: %v", err)
 	}
@@ -60,7 +64,7 @@ func main() {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 10
 	}
-	pool := scheduler.New(maxConcurrent, taskRepo, defRepo, exec)
+	pool := scheduler.New(maxConcurrent, taskRepo, defRepo, exec, broker, logBroker)
 
 	recCtx, recCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer recCancel()
@@ -80,6 +84,7 @@ func main() {
 	defHandler := handlers.NewDefinitionHandler(defSvc)
 	taskHandler := handlers.NewTaskHandler(taskSvc)
 	logHandler := handlers.NewLogHandler(taskSvc, vlogs)
+	sseHandler := handlers.NewSSEHandler(taskSvc, broker, logBroker, vlogs)
 
 	// Router
 	r := chi.NewRouter()
@@ -96,6 +101,8 @@ func main() {
 		r.Mount("/definitions", defHandler.Routes())
 		r.Mount("/tasks", taskHandler.Routes())
 		r.Get("/tasks/{id}/logs", logHandler.GetTaskLogs)
+		r.Get("/tasks/{id}/stream", sseHandler.StreamTaskLogs)
+		r.Get("/events", sseHandler.StreamEvents)
 	})
 
 	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
