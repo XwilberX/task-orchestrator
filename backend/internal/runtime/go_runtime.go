@@ -4,7 +4,12 @@ import "strings"
 
 type Go struct{}
 
-func (g *Go) Image() string { return "golang:1.22-alpine" }
+func (g *Go) Image(version string) string {
+	if version == "" {
+		version = "1.22"
+	}
+	return "golang:" + version + "-alpine"
+}
 func (g *Go) Entrypoint() string { return "main.go" }
 
 func (g *Go) InstallCommand(packages string) string {

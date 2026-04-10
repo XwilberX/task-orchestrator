@@ -6,6 +6,7 @@ type RunConfig struct {
 	DefinitionName string
 	Attempt        int
 	Runtime        string
+	RuntimeVersion string
 	Code           string
 	Args           []string
 	Packages       string

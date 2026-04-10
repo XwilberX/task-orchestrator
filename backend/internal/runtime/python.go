@@ -4,7 +4,12 @@ import "strings"
 
 type Python struct{}
 
-func (p *Python) Image() string { return "python:3.11-slim" }
+func (p *Python) Image(version string) string {
+	if version == "" {
+		version = "3.11"
+	}
+	return "python:" + version + "-slim"
+}
 func (p *Python) Entrypoint() string { return "main.py" }
 
 func (p *Python) InstallCommand(packages string) string {

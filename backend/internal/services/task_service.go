@@ -106,6 +106,7 @@ func (s *TaskService) buildTask(ctx context.Context, req models.DispatchRequest)
 		task.DefinitionID = def.ID
 		task.DefinitionName = def.Name
 		task.Runtime = def.Runtime
+		task.RuntimeVersion = def.RuntimeVersion
 		task.Code = def.Code
 		task.Packages = def.Packages
 		task.MaxRetries = def.MaxRetries
@@ -124,6 +125,7 @@ func (s *TaskService) buildTask(ctx context.Context, req models.DispatchRequest)
 			return nil, errors.New("runtime y code son requeridos para tareas ad-hoc")
 		}
 		task.Runtime = req.Runtime
+		task.RuntimeVersion = req.RuntimeVersion
 		task.Code = req.Code
 		task.Args = req.Args
 		task.Packages = req.Packages

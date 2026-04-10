@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import CodeEditor from './CodeEditor.svelte';
-	import type { DefinitionPayload } from '$lib/services/definitions';
+	import { definitionsService, type DefinitionPayload, type RuntimeMeta } from '$lib/services/definitions';
 
 	let {
 		initial = {},
@@ -12,20 +13,44 @@
 		loading?: boolean;
 	} = $props();
 
-	const RUNTIMES = ['python','nodejs','typescript','go','java'] as const;
+	type RuntimeKey = 'python' | 'nodejs' | 'go' | 'java';
+	const RUNTIMES: RuntimeKey[] = ['python', 'nodejs', 'go', 'java'];
+
+	const RUNTIME_LABELS: Record<RuntimeKey, string> = {
+		python: 'Python',
+		nodejs: 'Node.js',
+		go:     'Go',
+		java:   'Java'
+	};
 
 	const PLACEHOLDERS: Record<string, string> = {
 		python: `import sys\nprint("Hello from task!", sys.argv)`,
 		nodejs: `console.log("Hello from task!", process.argv);`,
-		typescript: `const args: string[] = process.argv.slice(2);\nconsole.log("Hello!", args);`,
-		go: `package main\nimport "fmt"\nfunc main() { fmt.Println("Hello from task!") }`,
-		java: `public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello from task!");\n    }\n}`
+		go:     `package main\nimport "fmt"\nfunc main() { fmt.Println("Hello from task!") }`,
+		java:   `public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello from task!");\n    }\n}`
 	};
+
+	// Versiones disponibles desde el endpoint
+	let runtimesMeta = $state<Record<string, RuntimeMeta>>({});
+	let versionsLoading = $state(true);
+
+	onMount(async () => {
+		try {
+			runtimesMeta = await definitionsService.runtimes();
+		} catch {
+			// Si falla, el select de versión estará vacío — el usuario puede igualmente guardar
+		} finally {
+			versionsLoading = false;
+		}
+	});
 
 	// Form state
 	let name = $state(initial.name ?? '');
 	let description = $state(initial.description ?? '');
-	let runtime = $state<typeof RUNTIMES[number]>(initial.runtime ?? 'python');
+	let runtime = $state<RuntimeKey>((initial.runtime as RuntimeKey) ?? 'python');
+
+	const currentVersions = $derived(runtimesMeta[runtime]?.versions ?? []);
+	let runtimeVersion = $state(initial.runtime_version ?? '');
 	let code = $state(initial.code ?? PLACEHOLDERS.python);
 	let packages = $state(initial.packages ?? '');
 	let timeoutSeconds = $state(initial.timeout_seconds ?? 60);
@@ -43,7 +68,16 @@
 		if (!initial.code) {
 			code = PLACEHOLDERS[runtime];
 		}
+		// Resetear versión al cambiar runtime
+		runtimeVersion = '';
 	}
+
+	// Auto-seleccionar primera versión disponible
+	$effect(() => {
+		if (currentVersions.length > 0 && !runtimeVersion) {
+			runtimeVersion = currentVersions[0];
+		}
+	});
 
 	function validate(): boolean {
 		const e: Record<string, string> = {};
@@ -60,6 +94,7 @@
 			name: name.trim(),
 			description: description.trim(),
 			runtime,
+			runtime_version: runtimeVersion,
 			code,
 			packages: packages.trim(),
 			timeout_seconds: timeoutSeconds,
@@ -85,47 +120,63 @@
 
 			<div>
 				<label class={labelClass} for="name">Nombre <span class="text-red-400">*</span></label>
-				<input
-					id="name"
-					bind:value={name}
-					class={fieldClass}
-					placeholder="send-report-email"
-				/>
+				<input id="name" bind:value={name} class={fieldClass} placeholder="send-report-email" />
 				{#if errors.name}<p class={errorClass}>{errors.name}</p>{/if}
 			</div>
 
 			<div>
 				<label class={labelClass} for="description">Descripción</label>
-				<input
-					id="description"
-					bind:value={description}
-					class={fieldClass}
-					placeholder="Descripción opcional..."
-				/>
+				<input id="description" bind:value={description} class={fieldClass} placeholder="Descripción opcional..." />
 			</div>
 
-			<div>
-				<label class={labelClass} for="runtime">Runtime</label>
-				<select
-					id="runtime"
-					bind:value={runtime}
-					onchange={handleRuntimeChange}
-					class="{fieldClass} cursor-pointer"
-				>
-					{#each RUNTIMES as rt}
-						<option value={rt}>{rt}</option>
-					{/each}
-				</select>
+			<!-- Runtime + versión -->
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<label class={labelClass} for="runtime">Runtime</label>
+					<select
+						id="runtime"
+						bind:value={runtime}
+						onchange={handleRuntimeChange}
+						class="{fieldClass} cursor-pointer"
+					>
+						{#each RUNTIMES as rt}
+							<option value={rt}>{RUNTIME_LABELS[rt]}</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label class={labelClass} for="version">
+						Versión
+						{#if versionsLoading}
+							<span class="text-[#3d3b3e]">cargando...</span>
+						{/if}
+					</label>
+					<select
+						id="version"
+						bind:value={runtimeVersion}
+						disabled={versionsLoading || currentVersions.length === 0}
+						class="{fieldClass} cursor-pointer disabled:opacity-50"
+					>
+						{#if currentVersions.length === 0}
+							<option value="">Sin versiones</option>
+						{:else}
+							{#each currentVersions as v}
+								<option value={v}>{v}</option>
+							{/each}
+						{/if}
+					</select>
+				</div>
 			</div>
+
+			{#if runtimeVersion && runtimesMeta[runtime]}
+				<p class="text-xs text-[#3d3b3e] font-mono">
+					Imagen: {runtimesMeta[runtime].image}:{runtimeVersion}{runtimesMeta[runtime].suffix}
+				</p>
+			{/if}
 
 			<div>
 				<label class={labelClass} for="packages">Paquetes</label>
-				<input
-					id="packages"
-					bind:value={packages}
-					class={fieldClass}
-					placeholder="requests pandas numpy"
-				/>
+				<input id="packages" bind:value={packages} class={fieldClass} placeholder="requests pandas numpy" />
 				<p class="mt-1 text-xs text-[#3d3b3e]">Separados por espacios</p>
 			</div>
 
@@ -167,6 +218,7 @@
 					type="button"
 					onclick={() => networkEnabled = !networkEnabled}
 					class="relative h-5 w-9 rounded-full transition-colors {networkEnabled ? 'bg-violet-600' : 'bg-[#3d3b3e]'}"
+					aria-label="Toggle network"
 				>
 					<span class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform {networkEnabled ? 'translate-x-4' : 'translate-x-0.5'}"></span>
 				</button>

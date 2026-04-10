@@ -211,6 +211,7 @@ func (p *WorkerPool) runOnce(task *models.Task) *executor.ExecResult {
 		DefinitionName: task.DefinitionName,
 		Attempt:        task.Attempt,
 		Runtime:        task.Runtime,
+		RuntimeVersion: task.RuntimeVersion,
 		Code:           task.Code,
 		Args:           task.Args,
 		Packages:       task.Packages,

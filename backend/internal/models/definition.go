@@ -6,7 +6,8 @@ type Definition struct {
 	ID                string    `json:"id" bson:"_id"`
 	Name              string    `json:"name" bson:"name" validate:"required,min=1,max=100"`
 	Description       string    `json:"description" bson:"description"`
-	Runtime           string    `json:"runtime" bson:"runtime" validate:"required,oneof=python nodejs typescript go java"`
+	Runtime           string    `json:"runtime" bson:"runtime" validate:"required,oneof=python nodejs go java"`
+	RuntimeVersion    string    `json:"runtime_version" bson:"runtime_version"`
 	Code              string    `json:"code" bson:"code" validate:"required"`
 	Packages          string    `json:"packages" bson:"packages"`
 	TimeoutSeconds    int       `json:"timeout_seconds" bson:"timeout_seconds" validate:"min=1,max=3600"`

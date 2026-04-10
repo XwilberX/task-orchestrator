@@ -4,7 +4,7 @@ import "fmt"
 
 // Runtime define la interfaz que cada lenguaje debe implementar.
 type Runtime interface {
-	Image() string
+	Image(version string) string
 	InstallCommand(packages string) string
 	RunCommand(entryPoint string, args []string) []string
 	Entrypoint() string // nombre del archivo a inyectar (ej: main.py)
@@ -17,8 +17,6 @@ func Get(name string) (Runtime, error) {
 		return &Python{}, nil
 	case "nodejs":
 		return &NodeJS{}, nil
-	case "typescript":
-		return &TypeScript{}, nil
 	case "go":
 		return &Go{}, nil
 	case "java":

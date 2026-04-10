@@ -46,7 +46,7 @@ func (e *Executor) Run(ctx context.Context, cfg RunConfig) (*ExecResult, error) 
 	}
 
 	// 1. Asegurar imagen disponible
-	if err := e.cache.ensure(ctx, e.cli, rt.Image()); err != nil {
+	if err := e.cache.ensure(ctx, e.cli, rt.Image(cfg.RuntimeVersion)); err != nil {
 		return nil, fmt.Errorf("pull imagen: %w", err)
 	}
 
@@ -62,7 +62,7 @@ func (e *Executor) Run(ctx context.Context, cfg RunConfig) (*ExecResult, error) 
 	// 4. Crear contenedor
 	resp, err := e.cli.ContainerCreate(ctx,
 		&container.Config{
-			Image:      rt.Image(),
+			Image:      rt.Image(cfg.RuntimeVersion),
 			Cmd:        cmd,
 			WorkingDir: "/task",
 		},

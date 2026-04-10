@@ -23,6 +23,7 @@ type Task struct {
 	DefinitionID      string                 `json:"definition_id,omitempty" bson:"definition_id,omitempty"`
 	DefinitionName    string                 `json:"definition,omitempty" bson:"definition,omitempty"`
 	Runtime           string                 `json:"runtime" bson:"runtime"`
+	RuntimeVersion    string                 `json:"runtime_version,omitempty" bson:"runtime_version,omitempty"`
 	Code              string                 `json:"code" bson:"code"`
 	Args              []string               `json:"args,omitempty" bson:"args,omitempty"`
 	Packages          string                 `json:"packages,omitempty" bson:"packages,omitempty"`
@@ -49,8 +50,9 @@ type DispatchRequest struct {
 	Input      map[string]interface{} `json:"input"`
 
 	// Tarea ad-hoc
-	Runtime  string   `json:"runtime"`
-	Code     string   `json:"code"`
+	Runtime        string   `json:"runtime"`
+	RuntimeVersion string   `json:"runtime_version"`
+	Code           string   `json:"code"`
 	Args     []string `json:"args"`
 	Packages string   `json:"packages"`
 
