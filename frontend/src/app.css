@@ -1,0 +1,28 @@
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* Satoshi — fuente variable local */
+@font-face {
+	font-family: 'Satoshi';
+	src: url('/fonts/Satoshi-Variable.woff2') format('woff2-variations');
+	font-weight: 300 900;
+	font-display: swap;
+	font-style: normal;
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+		font-family: 'Satoshi', sans-serif;
+	}
+	html {
+		@apply font-sans;
+	}
+	code, pre, .font-mono {
+		font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
+	}
+}
