@@ -108,6 +108,7 @@ func main() {
 	webhookHandler := handlers.NewWebhookHandler(webhookSvc)
 	logHandler := handlers.NewLogHandler(taskSvc, vlogs)
 	sseHandler := handlers.NewSSEHandler(taskSvc, broker, logBroker, vlogs)
+	metricsHandler := handlers.NewMetricsHandler(taskRepo)
 
 	// Router
 	r := chi.NewRouter()
@@ -128,6 +129,7 @@ func main() {
 		r.Get("/events", sseHandler.StreamEvents)
 		r.Mount("/schedules", schedHandler.Routes())
 		r.Mount("/webhooks", webhookHandler.Routes())
+		r.Get("/metrics/summary", metricsHandler.Summary)
 	})
 
 	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
