@@ -113,6 +113,7 @@ func main() {
 
 	// Router
 	r := chi.NewRouter()
+	r.Use(apimw.CORS)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 

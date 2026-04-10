@@ -104,80 +104,48 @@ func (r *TaskRepository) CountRunningByDefinition(ctx context.Context, definitio
 func (r *TaskRepository) MetricsSummary(ctx context.Context) (map[string]interface{}, error) {
 	startOfDay := time.Now().UTC().Truncate(24 * time.Hour)
 
+	// CountDocuments devuelve int64 directamente, sin ambigüedad de tipos BSON.
+	tasksToday, _ := r.col.CountDocuments(ctx, bson.M{"created_at": bson.M{"$gte": startOfDay}})
+	tasksFailed, _ := r.col.CountDocuments(ctx, bson.M{
+		"created_at": bson.M{"$gte": startOfDay},
+		"status":     models.StatusFailed,
+	})
+	tasksQueued, _ := r.col.CountDocuments(ctx, bson.M{"status": models.StatusQueued})
+	tasksRunning, _ := r.col.CountDocuments(ctx, bson.M{"status": models.StatusRunning})
+
+	// Duración promedio via agregación simple
+	avgDuration := 0.0
 	pipeline := mongo.Pipeline{
-		{{Key: "$facet", Value: bson.M{
-			"tasks_today": bson.A{
-				bson.M{"$match": bson.M{"created_at": bson.M{"$gte": startOfDay}}},
-				bson.M{"$count": "count"},
-			},
-			"tasks_failed": bson.A{
-				bson.M{"$match": bson.M{
-					"created_at": bson.M{"$gte": startOfDay},
-					"status":     models.StatusFailed,
-				}},
-				bson.M{"$count": "count"},
-			},
-			"tasks_queued": bson.A{
-				bson.M{"$match": bson.M{"status": models.StatusQueued}},
-				bson.M{"$count": "count"},
-			},
-			"tasks_running": bson.A{
-				bson.M{"$match": bson.M{"status": models.StatusRunning}},
-				bson.M{"$count": "count"},
-			},
-			"avg_duration": bson.A{
-				bson.M{"$match": bson.M{
-					"created_at": bson.M{"$gte": startOfDay},
-					"started_at": bson.M{"$exists": true},
-					"finished_at": bson.M{"$exists": true},
-				}},
-				bson.M{"$group": bson.M{
-					"_id": nil,
-					"avg": bson.M{"$avg": bson.M{
-						"$divide": bson.A{
-							bson.M{"$subtract": bson.A{"$finished_at", "$started_at"}},
-							1000,
-						},
-					}},
-				}},
-			},
+		{{Key: "$match", Value: bson.M{
+			"created_at":  bson.M{"$gte": startOfDay},
+			"started_at":  bson.M{"$exists": true},
+			"finished_at": bson.M{"$exists": true},
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": nil,
+			"avg": bson.M{"$avg": bson.M{
+				"$divide": bson.A{
+					bson.M{"$subtract": bson.A{"$finished_at", "$started_at"}},
+					1000,
+				},
+			}},
 		}}},
 	}
-
 	cursor, err := r.col.Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, err
-	}
-	var results []bson.M
-	if err := cursor.All(ctx, &results); err != nil {
-		return nil, err
-	}
-
-	extract := func(key string) int {
-		if arr, ok := results[0][key].(bson.A); ok && len(arr) > 0 {
-			if doc, ok := arr[0].(bson.M); ok {
-				if v, ok := doc["count"].(int32); ok {
-					return int(v)
-				}
-			}
-		}
-		return 0
-	}
-
-	avgDuration := 0.0
-	if arr, ok := results[0]["avg_duration"].(bson.A); ok && len(arr) > 0 {
-		if doc, ok := arr[0].(bson.M); ok {
-			if v, ok := doc["avg"].(float64); ok {
+	if err == nil {
+		var res []bson.M
+		if cursor.All(ctx, &res) == nil && len(res) > 0 {
+			if v, ok := res[0]["avg"].(float64); ok {
 				avgDuration = v
 			}
 		}
 	}
 
 	return map[string]interface{}{
-		"tasks_today":          extract("tasks_today"),
-		"tasks_failed":         extract("tasks_failed"),
-		"tasks_queued":         extract("tasks_queued"),
-		"tasks_running":        extract("tasks_running"),
+		"tasks_today":          tasksToday,
+		"tasks_failed":         tasksFailed,
+		"tasks_queued":         tasksQueued,
+		"tasks_running":        tasksRunning,
 		"avg_duration_seconds": avgDuration,
 	}, nil
 }

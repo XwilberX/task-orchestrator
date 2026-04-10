@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,12 +25,13 @@ type runtimeMeta struct {
 
 // runtimeDef es la configuración estática de cada runtime para consultar Docker Hub.
 type runtimeDef struct {
-	key     string
-	label   string
-	image   string  // nombre en Docker Hub (puede ser distinto del namespace)
-	hubRepo string  // repositorio en Docker Hub API
-	suffix  string  // sufijo que se agrega al tag (ej: "-slim")
-	pattern *regexp.Regexp
+	key         string
+	label       string
+	image       string
+	hubRepo     string
+	suffix      string         // sufijo en el tag de Docker Hub (ej: "-slim")
+	pattern     *regexp.Regexp // patrón para validar la versión (sin suffix)
+	searchTerms []string       // términos de búsqueda para filtrar tags en Docker Hub
 }
 
 var runtimeDefs = []runtimeDef{
@@ -40,6 +42,8 @@ var runtimeDefs = []runtimeDef{
 		hubRepo: "library/python",
 		suffix:  "-slim",
 		pattern: regexp.MustCompile(`^\d+\.\d+$`),
+		// Buscamos tags que contengan "3." para obtener versiones Python 3.x
+		searchTerms: []string{"3."},
 	},
 	{
 		key:     "nodejs",
@@ -48,6 +52,8 @@ var runtimeDefs = []runtimeDef{
 		hubRepo: "library/node",
 		suffix:  "-slim",
 		pattern: regexp.MustCompile(`^\d+$`),
+		// Buscamos por cada major version de Node LTS y actuales
+		searchTerms: []string{"18-", "20-", "22-", "23-", "24-"},
 	},
 	{
 		key:     "go",
@@ -56,14 +62,18 @@ var runtimeDefs = []runtimeDef{
 		hubRepo: "library/golang",
 		suffix:  "-alpine",
 		pattern: regexp.MustCompile(`^\d+\.\d+$`),
+		// Buscamos por minor versions recientes de Go 1.x
+		searchTerms: []string{"1.24", "1.23", "1.22", "1.21", "1.20", "1.19"},
 	},
 	{
 		key:     "java",
 		label:   "Java",
 		image:   "eclipse-temurin",
 		hubRepo: "library/eclipse-temurin",
-		suffix:  "-alpine",
+		suffix:  "",
 		pattern: regexp.MustCompile(`^\d+$`),
+		// eclipse-temurin no tiene tags -alpine, usamos tag plain (21, 17, 11, 8)
+		searchTerms: []string{"8", "11", "17", "21", "23"},
 	},
 }
 
@@ -107,7 +117,6 @@ func (h *RuntimesHandler) getRuntimes(ctx interface{ Done() <-chan struct{} }) (
 	}
 	cache.mu.RUnlock()
 
-	// Fetch en paralelo
 	type result struct {
 		key  string
 		meta runtimeMeta
@@ -157,61 +166,96 @@ func (h *RuntimesHandler) getRuntimes(ctx interface{ Done() <-chan struct{} }) (
 	return data, nil
 }
 
-// fetchVersions consulta Docker Hub y devuelve versiones limpias (sin suffix).
+// fetchVersions consulta Docker Hub usando múltiples términos de búsqueda por major/minor version.
 func (h *RuntimesHandler) fetchVersions(def runtimeDef) ([]string, error) {
-	url := fmt.Sprintf(
-		"https://hub.docker.com/v2/repositories/%s/tags?page_size=100&ordering=-name",
-		def.hubRepo,
-	)
-
-	resp, err := h.client.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var payload struct {
-		Results []struct {
-			Name string `json:"name"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-
 	seen := map[string]struct{}{}
 	var versions []string
 
-	for _, tag := range payload.Results {
-		// El tag en Docker Hub incluye el suffix (ej: "3.11-slim")
-		name := tag.Name
-		if !strings.HasSuffix(name, def.suffix) {
+	for _, term := range def.searchTerms {
+		url := fmt.Sprintf(
+			"https://hub.docker.com/v2/repositories/%s/tags?page_size=50&name=%s",
+			def.hubRepo, term,
+		)
+
+		resp, err := h.client.Get(url)
+		if err != nil {
 			continue
 		}
-		// Quitar el suffix para obtener la versión limpia
-		version := strings.TrimSuffix(name, def.suffix)
-		if !def.pattern.MatchString(version) {
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
 			continue
 		}
-		if _, dup := seen[version]; dup {
+
+		var payload struct {
+			Results []struct {
+				Name string `json:"name"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
 			continue
 		}
-		seen[version] = struct{}{}
-		versions = append(versions, version)
+
+		for _, tag := range payload.Results {
+			name := tag.Name
+			// Si hay suffix, el tag debe terminar exactamente con él
+			var version string
+			if def.suffix != "" {
+				if len(name) <= len(def.suffix) {
+					continue
+				}
+				if name[len(name)-len(def.suffix):] != def.suffix {
+					continue
+				}
+				version = name[:len(name)-len(def.suffix)]
+			} else {
+				version = name
+			}
+
+			if !def.pattern.MatchString(version) {
+				continue
+			}
+			if _, dup := seen[version]; dup {
+				continue
+			}
+			seen[version] = struct{}{}
+			versions = append(versions, version)
+		}
 	}
 
-	// Ordenar descendente (semver simple: string sort funciona para major.minor)
-	sort.Sort(sort.Reverse(sort.StringSlice(versions)))
+	// Ordenar descendente por versión semántica (numérico, no lexicográfico)
+	sort.Slice(versions, func(i, j int) bool {
+		return compareVersions(versions[i], versions[j]) > 0
+	})
 
-	// Limitar a 8 versiones máximo
-	if len(versions) > 8 {
-		versions = versions[:8]
+	if len(versions) > 10 {
+		versions = versions[:10]
 	}
 
 	return versions, nil
+}
+
+// compareVersions compara dos versiones numéricas (ej: "3.12" vs "3.9", "21" vs "8").
+// Devuelve >0 si a > b, <0 si a < b, 0 si son iguales.
+func compareVersions(a, b string) int {
+	partsA := strings.Split(a, ".")
+	partsB := strings.Split(b, ".")
+	max := len(partsA)
+	if len(partsB) > max {
+		max = len(partsB)
+	}
+	for i := 0; i < max; i++ {
+		var na, nb int
+		if i < len(partsA) {
+			na, _ = strconv.Atoi(partsA[i])
+		}
+		if i < len(partsB) {
+			nb, _ = strconv.Atoi(partsB[i])
+		}
+		if na != nb {
+			return na - nb
+		}
+	}
+	return 0
 }
