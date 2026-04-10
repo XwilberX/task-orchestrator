@@ -17,6 +17,6 @@ func (p *Python) InstallCommand(packages string) string {
 }
 
 func (p *Python) RunCommand(entryPoint string, args []string) []string {
-	cmd := []string{"python", entryPoint}
+	cmd := []string{"python", "-u", entryPoint}
 	return append(cmd, args...)
 }

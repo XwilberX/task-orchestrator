@@ -13,7 +13,7 @@ func (n *NodeJS) Image(version string) string {
 func (n *NodeJS) Entrypoint() string { return "main.js" }
 
 func (n *NodeJS) InstallCommand(packages string) string {
-	return "npm install --silent " + strings.TrimSpace(packages)
+	return "npm install " + strings.TrimSpace(packages)
 }
 
 func (n *NodeJS) RunCommand(entryPoint string, args []string) []string {

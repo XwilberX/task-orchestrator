@@ -19,7 +19,7 @@ type LogEntry struct {
 	TaskID         string    `json:"task_id"`
 	DefinitionName string    `json:"definition_name,omitempty"`
 	Runtime        string    `json:"runtime"`
-	Attempt        int       `json:"attempt"`
+	Attempt        string    `json:"attempt"`
 	Stream         string    `json:"stream"` // "stdout" | "stderr"
 }
 

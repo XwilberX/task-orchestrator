@@ -2,11 +2,12 @@ package executor
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,6 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 )
 
 // Executor ejecuta tareas en contenedores Docker aislados con gVisor.
@@ -151,7 +151,8 @@ func (e *Executor) waitAndStream(ctx context.Context, containerID string, cfg Ru
 	}, nil
 }
 
-// streamLogs lee stdout/stderr del contenedor línea a línea y los envía a Victoria Logs.
+// streamLogs lee el stream multiplexado de Docker frame a frame y emite cada línea en tiempo real.
+// El formato de Docker es: 8 bytes de header (byte 0 = stream type, bytes 4-7 = tamaño) + payload.
 func (e *Executor) streamLogs(ctx context.Context, containerID string, cfg RunConfig, out io.Writer) {
 	rc, err := e.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
 		ShowStdout: true,
@@ -164,35 +165,61 @@ func (e *Executor) streamLogs(ctx context.Context, containerID string, cfg RunCo
 	}
 	defer rc.Close()
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-	stdcopy.StdCopy(&stdoutBuf, &stderrBuf, rc)
+	hdr := make([]byte, 8)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 
-	e.scanAndSend(&stdoutBuf, "stdout", cfg, out)
-	e.scanAndSend(&stderrBuf, "stderr", cfg, out)
+		if _, err := io.ReadFull(rc, hdr); err != nil {
+			return
+		}
+
+		streamType := hdr[0]
+		size := binary.BigEndian.Uint32(hdr[4:])
+		if size == 0 {
+			continue
+		}
+
+		data := make([]byte, size)
+		if _, err := io.ReadFull(rc, data); err != nil {
+			return
+		}
+
+		stream := "stdout"
+		if streamType == 2 {
+			stream = "stderr"
+		}
+
+		for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			e.emitLine(line, stream, cfg, out)
+		}
+	}
 }
 
-// scanAndSend envía cada línea del buffer a Victoria Logs y al LogBroker.
-func (e *Executor) scanAndSend(r io.Reader, stream string, cfg RunConfig, out io.Writer) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if out != nil {
-			fmt.Fprintln(out, line)
-		}
-		if e.vlogs != nil {
-			e.vlogs.Write(logger.LogEntry{
-				Msg:            line,
-				Time:           time.Now().UTC(),
-				TaskID:         cfg.TaskID,
-				DefinitionName: cfg.DefinitionName,
-				Runtime:        cfg.Runtime,
-				Attempt:        cfg.Attempt,
-				Stream:         stream,
-			})
-		}
-		if e.logBroker != nil {
-			e.logBroker.Publish(cfg.TaskID, line)
-		}
+// emitLine envía una línea a Victoria Logs, al LogBroker y al buffer de salida.
+func (e *Executor) emitLine(line, stream string, cfg RunConfig, out io.Writer) {
+	if out != nil {
+		fmt.Fprintln(out, line)
+	}
+	if e.vlogs != nil {
+		e.vlogs.Write(logger.LogEntry{
+			Msg:            line,
+			Time:           time.Now().UTC(),
+			TaskID:         cfg.TaskID,
+			DefinitionName: cfg.DefinitionName,
+			Runtime:        cfg.Runtime,
+			Attempt:        strconv.Itoa(cfg.Attempt),
+			Stream:         stream,
+		})
+	}
+	if e.logBroker != nil {
+		e.logBroker.Publish(cfg.TaskID, line)
 	}
 }
 
@@ -221,15 +248,23 @@ func (e *Executor) copyCode(ctx context.Context, containerID, filename, code str
 func buildContainerCmd(rt runtime.Runtime, cfg RunConfig) []string {
 	entrypoint := "/task/" + rt.Entrypoint()
 	runParts := rt.RunCommand(entrypoint, cfg.Args)
-	runCmd := strings.Join(runParts, " ")
 
-	if cfg.Runtime == "java" {
+	// Algunos runtimes (ej. Java) ya devuelven ["sh", "-c", "<cmd>"].
+	// En ese caso inyectamos el install dentro del mismo sh -c.
+	if len(runParts) == 3 && runParts[0] == "sh" && runParts[1] == "-c" {
+		if cfg.Packages != "" {
+			if installCmd := rt.InstallCommand(cfg.Packages); installCmd != "" {
+				return []string{"sh", "-c", installCmd + " && " + runParts[2]}
+			}
+		}
 		return runParts
 	}
 
+	runCmd := strings.Join(runParts, " ")
 	if cfg.Packages != "" {
-		installCmd := rt.InstallCommand(cfg.Packages)
-		return []string{"sh", "-c", installCmd + " && " + runCmd}
+		if installCmd := rt.InstallCommand(cfg.Packages); installCmd != "" {
+			return []string{"sh", "-c", installCmd + " && " + runCmd}
+		}
 	}
 	return []string{"sh", "-c", runCmd}
 }

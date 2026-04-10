@@ -29,7 +29,7 @@ func Load() (*Config, error) {
 		VictoriaLogsURL:    getEnv("VICTORIA_LOGS_URL", "http://localhost:9428"),
 		DockerHost:         getEnv("DOCKER_HOST", "unix:///var/run/docker.sock"),
 		MaxConcurrentTasks: getEnv("MAX_CONCURRENT_TASKS", "10"),
-		GVisorRuntime:      getEnv("GVISOR_RUNTIME", "runsc"),
+		GVisorRuntime:      os.Getenv("GVISOR_RUNTIME"),
 	}, nil
 }
 
