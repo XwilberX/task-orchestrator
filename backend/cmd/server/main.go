@@ -58,6 +58,7 @@ func main() {
 	// Repositorios
 	defRepo := repositories.NewDefinitionRepository(db)
 	taskRepo := repositories.NewTaskRepository(db)
+	schedRepo := repositories.NewScheduleRepository(db)
 
 	// Worker pool
 	maxConcurrent, _ := strconv.Atoi(cfg.MaxConcurrentTasks)
@@ -80,9 +81,23 @@ func main() {
 	defSvc := services.NewDefinitionService(defRepo)
 	taskSvc := services.NewTaskService(taskRepo, defRepo, pool)
 
+	// Cron scheduler — se crea con taskSvc como Dispatcher
+	cronSched := scheduler.NewCronScheduler(taskSvc, schedRepo, defRepo)
+
+	loadCtx, loadCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer loadCancel()
+	if err := cronSched.Load(loadCtx); err != nil {
+		log.Printf("cron load warning: %v", err)
+	}
+	cronSched.Start()
+	defer cronSched.Stop()
+
+	schedSvc := services.NewScheduleService(schedRepo, defRepo, cronSched)
+
 	// Handlers
 	defHandler := handlers.NewDefinitionHandler(defSvc)
 	taskHandler := handlers.NewTaskHandler(taskSvc)
+	schedHandler := handlers.NewScheduleHandler(schedSvc)
 	logHandler := handlers.NewLogHandler(taskSvc, vlogs)
 	sseHandler := handlers.NewSSEHandler(taskSvc, broker, logBroker, vlogs)
 
@@ -103,6 +118,7 @@ func main() {
 		r.Get("/tasks/{id}/logs", logHandler.GetTaskLogs)
 		r.Get("/tasks/{id}/stream", sseHandler.StreamTaskLogs)
 		r.Get("/events", sseHandler.StreamEvents)
+		r.Mount("/schedules", schedHandler.Routes())
 	})
 
 	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
