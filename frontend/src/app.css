@@ -1,3 +1,4 @@
+@import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn-svelte/tailwind.css";
 @import "@fontsource-variable/jetbrains-mono";
@@ -11,18 +12,54 @@
 	font-style: normal;
 }
 
+/* ── DateRangePicker: forzar colores para tema oscuro ── */
+.date-picker-popover {
+	--background: #19191d;
+	--foreground: #e7e4ec;
+	--muted: #1f1f24;
+	--muted-foreground: #75757c;
+	--accent: #2b2c32;
+	--accent-foreground: #e7e4ec;
+	--primary: #7c3aed;
+	--primary-foreground: #ffffff;
+	--border: #2b2c32;
+	color: #e7e4ec;
+}
+.date-picker-popover button { color: #e7e4ec; }
+.date-picker-popover [data-outside-month] { color: #3d3b3e !important; }
+.date-picker-popover [data-disabled] { color: #3d3b3e !important; opacity: 0.4; }
+.date-picker-popover [data-selected] { background-color: #7c3aed !important; color: #fff !important; }
+.date-picker-popover [data-selection-start] { background-color: #7c3aed !important; color: #fff !important; }
+.date-picker-popover [data-selection-end] { background-color: #7c3aed !important; color: #fff !important; }
+.date-picker-popover [data-highlighted] { background-color: rgba(85,22,190,0.25) !important; }
+
 @layer base {
 	* {
-		@apply border-border outline-ring/50;
+		border-color: var(--border);
+		outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
 	}
 	body {
-		@apply bg-background text-foreground;
+		background-color: var(--background);
+		color: var(--foreground);
 		font-family: 'Satoshi', sans-serif;
-	}
-	html {
-		@apply font-sans;
 	}
 	code, pre, .font-mono {
 		font-family: 'JetBrains Mono Variable', 'JetBrains Mono', monospace;
+	}
+
+	/* Scrollbar oscuro para que no rompa el tema dark */
+	::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	::-webkit-scrollbar-thumb {
+		background: var(--border);
+		border-radius: 3px;
+	}
+	::-webkit-scrollbar-thumb:hover {
+		background: var(--muted-foreground);
 	}
 }

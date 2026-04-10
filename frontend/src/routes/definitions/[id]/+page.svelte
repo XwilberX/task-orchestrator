@@ -64,6 +64,7 @@
 					name: def.name,
 					description: def.description,
 					runtime: def.runtime,
+					runtime_version: def.runtime_version,
 					code: def.code,
 					packages: def.packages,
 					timeout_seconds: def.timeout_seconds,

@@ -157,7 +157,10 @@
 						disabled={versionsLoading || currentVersions.length === 0}
 						class="{fieldClass} cursor-pointer disabled:opacity-50"
 					>
-						{#if currentVersions.length === 0}
+						{#if versionsLoading}
+							<!-- Mantener la versión guardada como opción mientras carga para que el browser no resetee el select -->
+							<option value={runtimeVersion}>{runtimeVersion || 'Cargando...'}</option>
+						{:else if currentVersions.length === 0}
 							<option value="">Sin versiones</option>
 						{:else}
 							{#each currentVersions as v}

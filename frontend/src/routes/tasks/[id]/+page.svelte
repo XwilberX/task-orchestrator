@@ -8,7 +8,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { format, formatDistanceToNow } from 'date-fns';
 	import { es } from 'date-fns/locale';
-	import { ArrowLeft, Ban, Copy, RefreshCw } from '@lucide/svelte';
+	import { ArrowLeft, Ban, Copy, RefreshCw, ClipboardCopy, Maximize2, Minimize2 } from '@lucide/svelte';
 	import { PUBLIC_API_URL, PUBLIC_API_KEY } from '$env/static/public';
 
 	const taskId = page.params.id ?? '';
@@ -31,17 +31,40 @@
 	);
 
 	// ─── Logs ─────────────────────────────────────────────────────────────────
-	let logs = $state<string[]>([]);
+	interface LogLine {
+		msg: string;
+		stream: 'stdout' | 'stderr' | 'live';
+		time: string; // ISO
+	}
+
+	let logs = $state<LogLine[]>([]);
 	let logsLoading = $state(false);
 	let logContainer = $state<HTMLDivElement | undefined>(undefined);
+	let logContainerModal = $state<HTMLDivElement | undefined>(undefined);
 	let autoScroll = $state(true);
+	let logsExpanded = $state(false);
 
 	let eventSource: EventSource | null = null;
 
 	function scrollToBottom() {
-		if (autoScroll && logContainer) {
-			logContainer.scrollTop = logContainer.scrollHeight;
-		}
+		const el = logsExpanded ? logContainerModal : logContainer;
+		if (autoScroll && el) el.scrollTop = el.scrollHeight;
+	}
+
+	// Hora local del cliente con milisegundos, ej: 13:42:07.391
+	function fmtTime(isoTime: string): string {
+		return new Date(isoTime).toLocaleTimeString(undefined, {
+			hour12: false,
+			hour: '2-digit',
+			minute: '2-digit',
+			second: '2-digit',
+			fractionalSecondDigits: 3
+		});
+	}
+
+	function copyLogs() {
+		const text = logs.map(l => `[${l.stream}] ${l.msg}`).join('\n');
+		navigator.clipboard.writeText(text);
 	}
 
 	$effect(() => {
@@ -56,7 +79,7 @@
 			);
 			eventSource.onmessage = (e) => {
 				if (e.data && e.data !== '{}') {
-					logs.push(e.data);
+					logs.push({ msg: e.data, stream: 'live', time: new Date().toISOString() });
 					setTimeout(scrollToBottom, 10);
 				}
 			};
@@ -69,7 +92,11 @@
 			// Cargar logs históricos
 			logsLoading = true;
 			tasksService.logs(taskId).then((entries) => {
-				logs = entries.map((e) => e._msg);
+				logs = entries.map((e) => ({
+					msg: e._msg,
+					stream: (e.stream === 'stderr' ? 'stderr' : 'stdout') as LogLine['stream'],
+					time: e._time
+				}));
 				logsLoading = false;
 				setTimeout(scrollToBottom, 10);
 			}).catch(() => { logsLoading = false; });
@@ -188,52 +215,17 @@
 			<div class="grid grid-cols-1 gap-4 p-6 lg:grid-cols-5">
 				<!-- Logs (60%) -->
 				<div class="lg:col-span-3 flex flex-col gap-2">
-					<div class="flex items-center justify-between">
-						<h2 class="text-xs font-medium uppercase tracking-wider text-[#75757c]">
-							{task.status === 'RUNNING' ? 'Logs en vivo' : 'Logs'}
-						</h2>
-						<div class="flex items-center gap-2">
-							{#if task.status === 'RUNNING'}
-								<span class="flex items-center gap-1 text-xs text-violet-300">
-									<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400"></span>
-									LIVE
-								</span>
-							{/if}
-							<label class="flex items-center gap-1 text-xs text-[#75757c]">
-								<input type="checkbox" bind:checked={autoScroll} class="h-3 w-3" />
-								Auto-scroll
-							</label>
-						</div>
-					</div>
-
+					{@render logHeader()}
 					<div
 						bind:this={logContainer}
-						class="h-96 overflow-auto rounded-lg border border-[#1f1f24] bg-[#080809] p-4"
+						class="h-96 overflow-auto rounded-lg border border-[#1f1f24] bg-[#080809] p-3"
 						onscroll={() => {
 							if (!logContainer) return;
 							const atBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 50;
 							autoScroll = atBottom;
 						}}
 					>
-						{#if logsLoading}
-							<div class="flex items-center gap-2 text-[#75757c]">
-								<RefreshCw size={12} class="animate-spin" />
-								<span class="font-mono text-xs">Cargando logs...</span>
-							</div>
-						{:else if logs.length === 0}
-							<p class="font-mono text-xs text-[#3d3b3e]">
-								{task.status === 'PENDING' || task.status === 'QUEUED'
-									? 'Esperando inicio...'
-									: 'Sin output registrado'}
-							</p>
-						{:else}
-							{#each logs as line, i}
-								<div class="flex gap-3">
-									<span class="w-8 shrink-0 select-none text-right font-mono text-xs text-[#3d3b3e]">{i + 1}</span>
-									<span class="font-mono text-xs leading-relaxed text-[#e7e4ec] break-all">{line}</span>
-								</div>
-							{/each}
-						{/if}
+						{@render logLines()}
 					</div>
 				</div>
 
@@ -293,3 +285,103 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Modal de logs expandido -->
+{#if logsExpanded && task}
+	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-md p-6"
+		onclick={(e) => { if (e.target === e.currentTarget) logsExpanded = false; }}
+	>
+		<div class="flex flex-col w-full max-w-6xl h-[90vh] rounded-xl border border-[#2a2730] bg-[#0f0e12]/95 shadow-2xl overflow-hidden">
+			<!-- Header modal -->
+			<div class="flex items-center justify-between px-5 py-3 border-b border-[#1f1f24] shrink-0">
+				{@render logHeader(true)}
+			</div>
+			<!-- Cuerpo -->
+			<div
+				bind:this={logContainerModal}
+				class="flex-1 overflow-auto p-4"
+				onscroll={() => {
+					if (!logContainerModal) return;
+					const atBottom = logContainerModal.scrollHeight - logContainerModal.scrollTop - logContainerModal.clientHeight < 50;
+					autoScroll = atBottom;
+				}}
+			>
+				{@render logLines()}
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#snippet logHeader(insideModal = false)}
+	<div class="flex w-full items-center justify-between">
+		<h2 class="text-xs font-medium uppercase tracking-wider text-[#75757c]">
+			{task?.status === 'RUNNING' ? 'Logs en vivo' : 'Logs'}
+			{#if logs.length > 0}
+				<span class="ml-2 text-[#3d3b3e] normal-case font-normal tracking-normal">{logs.length} líneas</span>
+			{/if}
+		</h2>
+		<div class="flex items-center gap-3">
+			{#if task?.status === 'RUNNING'}
+				<span class="flex items-center gap-1 text-xs text-violet-300">
+					<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400"></span>
+					LIVE
+				</span>
+			{/if}
+			{#if logs.length > 0}
+				<button onclick={copyLogs} class="flex items-center gap-1 text-xs text-[#75757c] hover:text-[#a09da1] transition-colors">
+					<ClipboardCopy size={11} />
+					Copiar
+				</button>
+			{/if}
+			<label class="flex items-center gap-1 text-xs text-[#75757c] cursor-pointer">
+				<input type="checkbox" bind:checked={autoScroll} class="h-3 w-3" />
+				Auto-scroll
+			</label>
+			<button
+				onclick={() => { logsExpanded = !logsExpanded; setTimeout(scrollToBottom, 50); }}
+				class="text-[#75757c] hover:text-[#a09da1] transition-colors"
+				title={logsExpanded ? 'Cerrar' : 'Expandir'}
+			>
+				{#if insideModal}
+					<Minimize2 size={13} />
+				{:else}
+					<Maximize2 size={13} />
+				{/if}
+			</button>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet logLines()}
+	{#if logsLoading}
+		<div class="flex items-center gap-2 text-[#75757c]">
+			<RefreshCw size={12} class="animate-spin" />
+			<span class="font-mono text-xs">Cargando logs...</span>
+		</div>
+	{:else if logs.length === 0}
+		<p class="font-mono text-xs text-[#3d3b3e]">
+			{task?.status === 'PENDING' || task?.status === 'QUEUED'
+				? 'Esperando inicio...'
+				: 'Sin output registrado'}
+		</p>
+	{:else}
+		{#each logs as line, i}
+			<div class="group flex gap-2 rounded px-1 py-[1px] hover:bg-[#0f0f12]">
+				<span class="w-7 shrink-0 select-none text-right font-mono text-[10px] text-[#2e2d30] group-hover:text-[#3d3b3e] leading-relaxed pt-px">{i + 1}</span>
+				<span class="shrink-0 font-mono text-[10px] text-[#3d3b3e] group-hover:text-[#504e52] leading-relaxed pt-px w-24 tabular-nums">
+					{fmtTime(line.time)}
+				</span>
+				{#if line.stream === 'stderr'}
+					<span class="shrink-0 self-start mt-[3px] rounded px-1 py-px font-mono text-[9px] uppercase leading-none bg-amber-950/60 text-amber-400/80">err</span>
+				{:else if line.stream === 'stdout'}
+					<span class="shrink-0 self-start mt-[3px] rounded px-1 py-px font-mono text-[9px] uppercase leading-none bg-transparent text-[#2e2d30] group-hover:text-[#3d3b3e]">out</span>
+				{:else}
+					<span class="shrink-0 w-6"></span>
+				{/if}
+				<span class="font-mono text-xs leading-relaxed break-all {line.stream === 'stderr' ? 'text-amber-300/70' : 'text-[#e7e4ec]'}">{line.msg}</span>
+			</div>
+		{/each}
+	{/if}
+{/snippet}
