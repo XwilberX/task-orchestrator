@@ -105,7 +105,9 @@
 
 		<!-- Contenido principal -->
 		<main class="flex-1 overflow-auto">
-			{@render children()}
+			<div class="mx-auto h-full w-full max-w-7xl flex flex-col">
+				{@render children()}
+			</div>
 		</main>
 
 	</div>

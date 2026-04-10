@@ -7,7 +7,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { formatDistanceToNow, format } from 'date-fns';
 	import { es } from 'date-fns/locale';
-	import { Activity, CheckCircle2, XCircle, Clock, Timer } from '@lucide/svelte';
+	import { Activity, CheckCircle2, XCircle, Clock, Timer, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import type { MetricsSummary } from '$lib/services/metrics';
 	import type { Task } from '$lib/services/tasks';
 
@@ -43,6 +43,21 @@
 	}
 
 	const today = format(new Date(), "d MMM yyyy", { locale: es });
+
+	// ─── Paginación ────────────────────────────────────────────────────────────
+	const PAGE_SIZE = 10;
+	let currentPage = $state(1);
+	const totalPages = $derived(Math.max(1, Math.ceil((tasksData?.length ?? 0) / PAGE_SIZE)));
+	const paginated = $derived((tasksData ?? []).slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE));
+	const start = $derived((currentPage - 1) * PAGE_SIZE + 1);
+	const end = $derived(Math.min(currentPage * PAGE_SIZE, tasksData?.length ?? 0));
+	const visiblePages = $derived(() => {
+		const total = totalPages;
+		if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+		if (currentPage <= 4) return Array.from({ length: 7 }, (_, i) => i + 1);
+		if (currentPage >= total - 3) return Array.from({ length: 7 }, (_, i) => total - 6 + i);
+		return Array.from({ length: 7 }, (_, i) => currentPage - 3 + i);
+	});
 </script>
 
 <div class="flex h-full flex-col">
@@ -129,7 +144,12 @@
 		<!-- Recent tasks table -->
 		<div class="rounded-lg border border-[#1f1f24] bg-[#19191d]">
 			<div class="flex items-center justify-between border-b border-[#1f1f24] px-4 py-3">
-				<h2 class="text-sm font-medium text-[#e7e4ec]">Ejecuciones recientes</h2>
+				<div class="flex items-center gap-2">
+					<h2 class="text-sm font-medium text-[#e7e4ec]">Ejecuciones recientes</h2>
+					{#if tasksData}
+						<span class="font-mono text-xs text-[#3d3b3e]">{tasksData.length} total</span>
+					{/if}
+				</div>
 				<a href="/tasks" class="text-xs text-[#d0bcff] hover:underline">Ver todas →</a>
 			</div>
 
@@ -158,7 +178,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each (tasksData ?? []).slice(0, 20) as task}
+						{#each paginated as task}
 							<tr
 								class="border-b border-[#1f1f24] last:border-0 hover:bg-[#1f1f24] transition-colors cursor-pointer"
 								onclick={() => { window.location.href = `/tasks/${task.id}`; }}
@@ -185,6 +205,42 @@
 						{/each}
 					</tbody>
 				</table>
+			{/if}
+
+			<!-- Paginación -->
+			{#if (tasksData?.length ?? 0) > PAGE_SIZE}
+				<div class="flex items-center justify-between border-t border-[#1f1f24] px-4 py-3">
+					<p class="font-mono text-xs text-[#3d3b3e]">
+						<span class="text-[#75757c]">{start}–{end}</span> de <span class="text-[#75757c]">{tasksData?.length}</span>
+					</p>
+					<div class="flex items-center gap-1">
+						<button
+							onclick={() => currentPage--}
+							disabled={currentPage === 1}
+							class="flex h-6 w-6 items-center justify-center rounded border border-[#1f1f24] text-[#75757c] transition-colors hover:bg-[#2b2c32] hover:text-[#e7e4ec] disabled:cursor-not-allowed disabled:opacity-30"
+						>
+							<ChevronLeft size={12} />
+						</button>
+						{#each visiblePages() as p}
+							<button
+								onclick={() => currentPage = p}
+								class="flex h-6 w-6 items-center justify-center rounded font-mono text-[11px] transition-colors
+									{p === currentPage
+										? 'bg-violet-600 text-white'
+										: 'border border-[#1f1f24] text-[#75757c] hover:bg-[#2b2c32] hover:text-[#e7e4ec]'}"
+							>
+								{p}
+							</button>
+						{/each}
+						<button
+							onclick={() => currentPage++}
+							disabled={currentPage === totalPages}
+							class="flex h-6 w-6 items-center justify-center rounded border border-[#1f1f24] text-[#75757c] transition-colors hover:bg-[#2b2c32] hover:text-[#e7e4ec] disabled:cursor-not-allowed disabled:opacity-30"
+						>
+							<ChevronRight size={12} />
+						</button>
+					</div>
+				</div>
 			{/if}
 		</div>
 
