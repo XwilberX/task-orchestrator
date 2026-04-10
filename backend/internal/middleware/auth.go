@@ -9,7 +9,12 @@ import (
 func APIKey(apiKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("X-API-Key") != apiKey {
+			// Acepta la clave por header (API clients) o query param (SSE/EventSource)
+			key := r.Header.Get("X-API-Key")
+			if key == "" {
+				key = r.URL.Query().Get("api_key")
+			}
+			if key != apiKey {
 				response.Unauthorized(w)
 				return
 			}
