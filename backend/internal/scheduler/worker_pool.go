@@ -15,6 +15,11 @@ import (
 
 const pollInterval = 3 * time.Second
 
+// WebhookNotifier es la interfaz que implementa webhook.Dispatcher.
+type WebhookNotifier interface {
+	Notify(task *models.Task)
+}
+
 // WorkerPool controla la concurrencia global de ejecución de tareas.
 type WorkerPool struct {
 	slots     chan struct{} // semáforo global
@@ -23,6 +28,7 @@ type WorkerPool struct {
 	exec      *executor.Executor
 	broker    *events.Broker
 	logBroker *events.LogBroker
+	webhooks  WebhookNotifier
 }
 
 // New crea un WorkerPool con el límite de concurrencia dado.
@@ -33,6 +39,7 @@ func New(
 	exec *executor.Executor,
 	broker *events.Broker,
 	logBroker *events.LogBroker,
+	webhooks WebhookNotifier,
 ) *WorkerPool {
 	return &WorkerPool{
 		slots:     make(chan struct{}, maxConcurrent),
@@ -41,6 +48,7 @@ func New(
 		exec:      exec,
 		broker:    broker,
 		logBroker: logBroker,
+		webhooks:  webhooks,
 	}
 }
 
@@ -150,6 +158,15 @@ func (p *WorkerPool) runWithRetries(task *models.Task) {
 		}
 
 		// ¿Reintentamos?
+		willRetry := (finalStatus == models.StatusFailed || finalStatus == models.StatusTimeout) &&
+			task.Attempt < task.MaxRetries
+		if !willRetry && p.webhooks != nil {
+			// Notificar webhooks solo en el estado terminal definitivo
+			task.Status = finalStatus
+			task.FinishedAt = &now
+			p.webhooks.Notify(task)
+		}
+
 		if (finalStatus == models.StatusFailed || finalStatus == models.StatusTimeout) &&
 			task.Attempt < task.MaxRetries {
 

@@ -16,6 +16,7 @@ import (
 	"github.com/XwilberX/task-orchestrator/internal/repositories"
 	"github.com/XwilberX/task-orchestrator/internal/scheduler"
 	"github.com/XwilberX/task-orchestrator/internal/services"
+	"github.com/XwilberX/task-orchestrator/internal/webhook"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -59,13 +60,18 @@ func main() {
 	defRepo := repositories.NewDefinitionRepository(db)
 	taskRepo := repositories.NewTaskRepository(db)
 	schedRepo := repositories.NewScheduleRepository(db)
+	webhookRepo := repositories.NewWebhookRepository(db)
+
+	// Webhook dispatcher
+	webhookDispatcher := webhook.New(webhookRepo, cfg.APIKey)
+	webhookDispatcher.Start(context.Background())
 
 	// Worker pool
 	maxConcurrent, _ := strconv.Atoi(cfg.MaxConcurrentTasks)
 	if maxConcurrent <= 0 {
 		maxConcurrent = 10
 	}
-	pool := scheduler.New(maxConcurrent, taskRepo, defRepo, exec, broker, logBroker)
+	pool := scheduler.New(maxConcurrent, taskRepo, defRepo, exec, broker, logBroker, webhookDispatcher)
 
 	recCtx, recCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer recCancel()
@@ -93,11 +99,13 @@ func main() {
 	defer cronSched.Stop()
 
 	schedSvc := services.NewScheduleService(schedRepo, defRepo, cronSched)
+	webhookSvc := services.NewWebhookService(webhookRepo)
 
 	// Handlers
 	defHandler := handlers.NewDefinitionHandler(defSvc)
 	taskHandler := handlers.NewTaskHandler(taskSvc)
 	schedHandler := handlers.NewScheduleHandler(schedSvc)
+	webhookHandler := handlers.NewWebhookHandler(webhookSvc)
 	logHandler := handlers.NewLogHandler(taskSvc, vlogs)
 	sseHandler := handlers.NewSSEHandler(taskSvc, broker, logBroker, vlogs)
 
@@ -119,6 +127,7 @@ func main() {
 		r.Get("/tasks/{id}/stream", sseHandler.StreamTaskLogs)
 		r.Get("/events", sseHandler.StreamEvents)
 		r.Mount("/schedules", schedHandler.Routes())
+		r.Mount("/webhooks", webhookHandler.Routes())
 	})
 
 	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
