@@ -2,6 +2,7 @@ package executor
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -9,10 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XwilberX/task-orchestrator/internal/logger"
 	"github.com/XwilberX/task-orchestrator/internal/runtime"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 // Executor ejecuta tareas en contenedores Docker aislados con gVisor.
@@ -20,16 +23,16 @@ type Executor struct {
 	cli     *client.Client
 	runtime string // "runsc" para gVisor, "" para runc (dev)
 	cache   imageCache
+	vlogs   *logger.Client
 }
 
 // New crea un Executor conectado al daemon Docker.
-// gvisorRuntime debe ser "runsc" en producción y "" en desarrollo/CI.
-func New(gvisorRuntime string) (*Executor, error) {
+func New(gvisorRuntime string, vlogs *logger.Client) (*Executor, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
-	return &Executor{cli: cli, runtime: gvisorRuntime}, nil
+	return &Executor{cli: cli, runtime: gvisorRuntime, vlogs: vlogs}, nil
 }
 
 // Run ejecuta la tarea y devuelve el resultado.
@@ -40,15 +43,15 @@ func (e *Executor) Run(ctx context.Context, cfg RunConfig) (*ExecResult, error) 
 		return nil, err
 	}
 
-	// 1. Asegurar que la imagen esté disponible
+	// 1. Asegurar imagen disponible
 	if err := e.cache.ensure(ctx, e.cli, rt.Image()); err != nil {
 		return nil, fmt.Errorf("pull imagen: %w", err)
 	}
 
-	// 2. Construir el comando del contenedor
+	// 2. Comando del contenedor
 	cmd := buildContainerCmd(rt, cfg)
 
-	// 3. Configuración de red
+	// 3. Red
 	networkMode := container.NetworkMode("none")
 	if cfg.NetworkEnabled {
 		networkMode = ""
@@ -75,14 +78,14 @@ func (e *Executor) Run(ctx context.Context, cfg RunConfig) (*ExecResult, error) 
 		return nil, fmt.Errorf("crear contenedor: %w", err)
 	}
 
-	// defer de limpieza — siempre se ejecuta
+	// Limpieza garantizada
 	defer func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		e.cli.ContainerRemove(cleanCtx, resp.ID, container.RemoveOptions{Force: true})
 	}()
 
-	// 5. Inyectar código vía tar (sin bind mounts)
+	// 5. Inyectar código vía tar
 	if err := e.copyCode(ctx, resp.ID, rt.Entrypoint(), cfg.Code); err != nil {
 		return nil, fmt.Errorf("copiar código: %w", err)
 	}
@@ -92,61 +95,100 @@ func (e *Executor) Run(ctx context.Context, cfg RunConfig) (*ExecResult, error) 
 		return nil, fmt.Errorf("iniciar contenedor: %w", err)
 	}
 
-	// 7. Esperar con timeout
-	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	return e.waitAndCollect(runCtx, resp.ID, cfg.TimeoutSeconds)
+	// 7. Esperar y recolectar logs en paralelo
+	return e.waitAndStream(ctx, resp.ID, cfg)
 }
 
-// waitAndCollect espera a que el contenedor termine y recolecta stdout+stderr.
-func (e *Executor) waitAndCollect(ctx context.Context, containerID string, timeoutSecs int) (*ExecResult, error) {
+// waitAndStream espera al contenedor y streamea stdout/stderr a Victoria Logs en tiempo real.
+func (e *Executor) waitAndStream(ctx context.Context, containerID string, cfg RunConfig) (*ExecResult, error) {
+	// Stream de logs en paralelo (Follow=true)
+	logCtx, logCancel := context.WithCancel(ctx)
+	defer logCancel()
+
+	var outputBuf bytes.Buffer
+	logsDone := make(chan struct{})
+
+	go func() {
+		defer close(logsDone)
+		e.streamLogs(logCtx, containerID, cfg, &outputBuf)
+	}()
+
 	statusCh, errCh := e.cli.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+
+	var exitCode int
+	var timedOut bool
 
 	select {
 	case err := <-errCh:
 		if err != nil {
-			// Timeout del context
 			if ctx.Err() != nil {
+				timedOut = true
 				killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				e.cli.ContainerKill(killCtx, containerID, "SIGKILL")
-				return &ExecResult{ExitCode: -1, TimedOut: true}, nil
+			} else {
+				return nil, fmt.Errorf("esperar contenedor: %w", err)
 			}
-			return nil, fmt.Errorf("esperar contenedor: %w", err)
 		}
 	case status := <-statusCh:
-		output, _ := e.collectLogs(context.Background(), containerID)
-		return &ExecResult{
-			ExitCode: int(status.StatusCode),
-			Output:   output,
-		}, nil
+		exitCode = int(status.StatusCode)
 	case <-ctx.Done():
+		timedOut = true
 		killCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		e.cli.ContainerKill(killCtx, containerID, "SIGKILL")
-		return &ExecResult{ExitCode: -1, TimedOut: true}, nil
 	}
 
-	output, _ := e.collectLogs(context.Background(), containerID)
-	return &ExecResult{Output: output}, nil
+	logCancel()
+	<-logsDone
+
+	return &ExecResult{
+		ExitCode: exitCode,
+		Output:   outputBuf.String(),
+		TimedOut: timedOut,
+	}, nil
 }
 
-// collectLogs obtiene stdout+stderr del contenedor.
-func (e *Executor) collectLogs(ctx context.Context, containerID string) (string, error) {
+// streamLogs lee stdout/stderr del contenedor línea a línea y los envía a Victoria Logs.
+func (e *Executor) streamLogs(ctx context.Context, containerID string, cfg RunConfig, out io.Writer) {
 	rc, err := e.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
+		Follow:     true,
+		Timestamps: false,
 	})
 	if err != nil {
-		return "", err
+		return
 	}
 	defer rc.Close()
 
-	var buf bytes.Buffer
-	io.Copy(&buf, rc)
-	return buf.String(), nil
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdcopy.StdCopy(&stdoutBuf, &stderrBuf, rc)
+
+	e.scanAndSend(&stdoutBuf, "stdout", cfg, out)
+	e.scanAndSend(&stderrBuf, "stderr", cfg, out)
+}
+
+// scanAndSend envía cada línea del buffer a Victoria Logs.
+func (e *Executor) scanAndSend(r io.Reader, stream string, cfg RunConfig, out io.Writer) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if out != nil {
+			fmt.Fprintln(out, line)
+		}
+		if e.vlogs != nil {
+			e.vlogs.Write(logger.LogEntry{
+				Msg:            line,
+				Time:           time.Now().UTC(),
+				TaskID:         cfg.TaskID,
+				DefinitionName: cfg.DefinitionName,
+				Runtime:        cfg.Runtime,
+				Attempt:        cfg.Attempt,
+				Stream:         stream,
+			})
+		}
+	}
 }
 
 // copyCode crea un tar en memoria e inyecta el código en el contenedor.
@@ -176,7 +218,6 @@ func buildContainerCmd(rt runtime.Runtime, cfg RunConfig) []string {
 	runParts := rt.RunCommand(entrypoint, cfg.Args)
 	runCmd := strings.Join(runParts, " ")
 
-	// Java ya devuelve un comando con sh -c incluido
 	if cfg.Runtime == "java" {
 		return runParts
 	}

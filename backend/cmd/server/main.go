@@ -10,6 +10,7 @@ import (
 	"github.com/XwilberX/task-orchestrator/internal/config"
 	"github.com/XwilberX/task-orchestrator/internal/executor"
 	"github.com/XwilberX/task-orchestrator/internal/handlers"
+	applogger "github.com/XwilberX/task-orchestrator/internal/logger"
 	apimw "github.com/XwilberX/task-orchestrator/internal/middleware"
 	"github.com/XwilberX/task-orchestrator/internal/repositories"
 	"github.com/XwilberX/task-orchestrator/internal/scheduler"
@@ -40,8 +41,12 @@ func main() {
 	}
 	log.Printf("conectado a MongoDB: %s", cfg.MongoDB)
 
+	// Victoria Logs
+	vlogs := applogger.New(cfg.VictoriaLogsURL)
+	log.Printf("Victoria Logs: %s", cfg.VictoriaLogsURL)
+
 	// Executor
-	exec, err := executor.New(cfg.GVisorRuntime)
+	exec, err := executor.New(cfg.GVisorRuntime, vlogs)
 	if err != nil {
 		log.Fatalf("executor: %v", err)
 	}
@@ -57,14 +62,12 @@ func main() {
 	}
 	pool := scheduler.New(maxConcurrent, taskRepo, defRepo, exec)
 
-	// Recovery: re-encolar tareas RUNNING de ejecuciones previas
 	recCtx, recCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer recCancel()
 	if err := pool.Recover(recCtx); err != nil {
 		log.Printf("recovery warning: %v", err)
 	}
 
-	// Iniciar polling de tareas QUEUED
 	poolCtx, poolCancel := context.WithCancel(context.Background())
 	defer poolCancel()
 	pool.Start(poolCtx)
@@ -76,6 +79,7 @@ func main() {
 	// Handlers
 	defHandler := handlers.NewDefinitionHandler(defSvc)
 	taskHandler := handlers.NewTaskHandler(taskSvc)
+	logHandler := handlers.NewLogHandler(taskSvc, vlogs)
 
 	// Router
 	r := chi.NewRouter()
@@ -91,6 +95,7 @@ func main() {
 		r.Use(apimw.APIKey(cfg.APIKey))
 		r.Mount("/definitions", defHandler.Routes())
 		r.Mount("/tasks", taskHandler.Routes())
+		r.Get("/tasks/{id}/logs", logHandler.GetTaskLogs)
 	})
 
 	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
