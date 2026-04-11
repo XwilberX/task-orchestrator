@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"math"
 	"time"
@@ -145,11 +146,22 @@ func (p *WorkerPool) runWithRetries(task *models.Task) {
 		}
 
 		now := time.Now().UTC()
-		p.taskRepo.UpdateFields(context.Background(), task.ID, bson.M{
+
+		// Parsear la última línea como output_data (JSON si es posible, string si no)
+		fields := bson.M{
 			"status":      finalStatus,
 			"finished_at": now,
 			"exit_code":   result.ExitCode,
-		})
+		}
+		if result.LastLine != "" {
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(result.LastLine), &parsed); err == nil {
+				fields["output_data"] = parsed
+			} else {
+				fields["output_data"] = result.LastLine
+			}
+		}
+		p.taskRepo.UpdateFields(context.Background(), task.ID, fields)
 		p.publish(task.ID, finalStatus)
 
 		// Cerrar el log broker para esta tarea

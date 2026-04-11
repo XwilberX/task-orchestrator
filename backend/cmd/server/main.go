@@ -103,7 +103,7 @@ func main() {
 
 	// Handlers
 	defHandler := handlers.NewDefinitionHandler(defSvc)
-	taskHandler := handlers.NewTaskHandler(taskSvc)
+	taskHandler := handlers.NewTaskHandler(taskSvc, broker)
 	schedHandler := handlers.NewScheduleHandler(schedSvc)
 	webhookHandler := handlers.NewWebhookHandler(webhookSvc)
 	logHandler := handlers.NewLogHandler(taskSvc, vlogs)
@@ -141,7 +141,7 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		WriteTimeout:      10 * time.Minute, // sync endpoint puede mantener conexión abierta
 		IdleTimeout:       120 * time.Second,
 	}
 

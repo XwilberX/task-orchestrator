@@ -38,6 +38,7 @@ type Task struct {
 	NetworkEnabled    bool                   `json:"network_enabled" bson:"network_enabled"`
 	ContainerID       string                 `json:"container_id,omitempty" bson:"container_id,omitempty"`
 	ExitCode          *int                   `json:"exit_code,omitempty" bson:"exit_code,omitempty"`
+	OutputData        interface{}            `json:"output_data,omitempty" bson:"output_data,omitempty"`
 	CreatedAt         time.Time              `json:"created_at" bson:"created_at"`
 	StartedAt         *time.Time             `json:"started_at,omitempty" bson:"started_at,omitempty"`
 	FinishedAt        *time.Time             `json:"finished_at,omitempty" bson:"finished_at,omitempty"`

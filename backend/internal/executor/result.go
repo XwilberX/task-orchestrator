@@ -20,5 +20,6 @@ type RunConfig struct {
 type ExecResult struct {
 	ExitCode int
 	Output   string // stdout + stderr combinados
+	LastLine string // última línea no vacía de stdout (valor de retorno del script)
 	TimedOut bool
 }

@@ -144,9 +144,20 @@ func (e *Executor) waitAndStream(ctx context.Context, containerID string, cfg Ru
 	logCancel()
 	<-logsDone
 
+	// Extraer la última línea no vacía como valor de retorno del script
+	lastLine := ""
+	lines := strings.Split(strings.TrimSpace(outputBuf.String()), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) != "" {
+			lastLine = strings.TrimSpace(lines[i])
+			break
+		}
+	}
+
 	return &ExecResult{
 		ExitCode: exitCode,
 		Output:   outputBuf.String(),
+		LastLine: lastLine,
 		TimedOut: timedOut,
 	}, nil
 }
