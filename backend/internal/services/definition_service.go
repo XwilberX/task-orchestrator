@@ -87,6 +87,23 @@ func (s *DefinitionService) Update(ctx context.Context, id string, updated model
 	return &updated, nil
 }
 
+// UpdateCode reemplaza solo el campo code de una definición existente.
+func (s *DefinitionService) UpdateCode(ctx context.Context, id, code string) (*models.Definition, error) {
+	existing, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrDefinitionNotFound
+	}
+	existing.Code = code
+	existing.UpdatedAt = time.Now().UTC()
+	if err := s.repo.Update(ctx, id, existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 func (s *DefinitionService) Delete(ctx context.Context, id string) error {
 	existing, err := s.repo.GetByID(ctx, id)
 	if err != nil {

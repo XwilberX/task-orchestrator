@@ -3,7 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/XwilberX/task-orchestrator/internal/models"
 	"github.com/XwilberX/task-orchestrator/internal/services"
@@ -28,6 +31,7 @@ func (h *DefinitionHandler) Routes() chi.Router {
 	r.Get("/{id}", h.GetByID)
 	r.Put("/{id}", h.Update)
 	r.Delete("/{id}", h.Delete)
+	r.Post("/{id}/upload", h.UploadCode)
 	return r
 }
 
@@ -104,6 +108,54 @@ func (h *DefinitionHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.OK(w, updated, "")
+}
+
+// UploadCode reemplaza el código de una definición con el contenido de un archivo.
+// Acepta multipart/form-data con el campo "file".
+// Extensiones permitidas: .py .js .go .java
+// Tamaño máximo: 5 MB (aplicado por el middleware MaxBodySize).
+func (h *DefinitionHandler) UploadCode(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		response.BadRequest(w, err, "error al parsear el formulario multipart")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		response.BadRequest(w, err, "campo 'file' requerido")
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	allowed := map[string]bool{".py": true, ".js": true, ".go": true, ".java": true}
+	if !allowed[ext] {
+		response.BadRequest(w, nil, "extensión no soportada (usa .py, .js, .go o .java)")
+		return
+	}
+
+	code, err := io.ReadAll(file)
+	if err != nil {
+		response.InternalError(w, err)
+		return
+	}
+	if len(code) == 0 {
+		response.BadRequest(w, nil, "el archivo está vacío")
+		return
+	}
+
+	updated, err := h.svc.UpdateCode(r.Context(), id, string(code))
+	if err != nil {
+		if errors.Is(err, services.ErrDefinitionNotFound) {
+			response.NotFound(w, err.Error())
+			return
+		}
+		response.InternalError(w, err)
+		return
+	}
+	response.OK(w, updated, "código actualizado desde archivo")
 }
 
 func (h *DefinitionHandler) Delete(w http.ResponseWriter, r *http.Request) {

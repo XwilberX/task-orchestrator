@@ -116,6 +116,7 @@ func main() {
 	r.Use(apimw.CORS)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(apimw.MaxBodySize(5 * 1024 * 1024)) // 5 MB máximo por request
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -135,8 +136,17 @@ func main() {
 		r.Get("/runtimes", runtimesHandler.List)
 	})
 
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	log.Printf("servidor iniciado en :%s (max_concurrent=%d)", cfg.Port, maxConcurrent)
-	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }
